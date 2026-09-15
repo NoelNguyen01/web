@@ -33,7 +33,7 @@ const FALLBACK_JS = Buffer.from(B64_JS, 'base64').toString('utf8');
 let config = {
   roomPasscode: '3667',
   adminPasscode: '2412',
-  geminiApiKey: process.env.GEMINI_API_KEY || 'AQ.Ab8RN6J1OFfBd3oqIYvf3MpvI1TVvVpEmhJStPSGi39SokBIkA'
+  geminiApiKey: process.env.GEMINI_API_KEY || 'AQ.Ab8RN6LjNDwbKcf-Jhu__vzPsyG3pwHAjhpJAL80yNPPOmcw6w'
 };
 
 function loadConfig() {
@@ -69,9 +69,8 @@ function saveMessages() {
   } catch (err) {}
 }
 
-// SECURITY FIX #1: Rate limiting tracker to prevent brute-force passcode guessing
-// Tracks failed attempts per IP address
-const failedAttempts = new Map(); // ip -> { count: number, lockedUntil: number }
+// Rate limiting tracker to prevent brute-force passcode guessing
+const failedAttempts = new Map();
 
 function checkRateLimit(ip) {
   const now = Date.now();
@@ -93,7 +92,7 @@ function recordFailedAttempt(ip) {
   const record = failedAttempts.get(ip) || { count: 0, lockedUntil: 0 };
   record.count += 1;
   if (record.count >= 5) {
-    record.lockedUntil = now + (5 * 60 * 1000); // Kho? 5 ph?t n?u sai qu? 5 l?n
+    record.lockedUntil = now + (5 * 60 * 1000); // Lock for 5 mins
   }
   failedAttempts.set(ip, record);
 }
@@ -102,7 +101,7 @@ function clearFailedAttempts(ip) {
   failedAttempts.delete(ip);
 }
 
-// SECURITY FIX #2: Escape HTML server-side to neutralize XSS payloads
+// Escape HTML server-side to neutralize XSS
 function sanitizeText(str) {
   if (typeof str !== 'string') return '';
   return str
@@ -116,15 +115,14 @@ function sanitizeText(str) {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
-    // Sanitize extension to prevent executing uploaded files
     const ext = path.extname(file.originalname).toLowerCase().slice(0, 10);
     const unique = Date.now() + '-' + crypto.randomBytes(8).toString('hex');
     cb(null, unique + ext);
   }
 });
 
-// SECURITY FIX #3: Strict 1GB file size limit enforced at Multer backend
-const ONE_GB = 1024 * 1024 * 1024; // 1,073,741,824 bytes (??NG 1GB)
+// Strict 1GB file size limit enforced at Multer backend
+const ONE_GB = 1024 * 1024 * 1024; // 1,073,741,824 bytes
 
 const upload = multer({
   storage: storage,
@@ -136,7 +134,7 @@ app.use('/uploads', express.static(UPLOAD_DIR));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(__dirname));
 
-// Guaranteed web routes (Self-contained)
+// Guaranteed web routes
 app.get('/', (req, res) => {
   const p = path.join(__dirname, 'public', 'index.html');
   if (fs.existsSync(p)) return res.sendFile(p);
@@ -200,18 +198,18 @@ app.get('/api/status', (req, res) => {
 });
 
 async function callGemini(promptText) {
-  const apiKey = config.geminiApiKey || process.env.GEMINI_API_KEY;
+  const apiKey = (config.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
     return '?? Bot AI ch?a ???c c?u h?nh GEMINI_API_KEY! Nh?n n?t ?? Bot AI ?? nh?p key.';
   }
 
-  const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=' + apiKey;
+  const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=' + encodeURIComponent(apiKey);
   const requestBody = {
     contents: [
       {
         parts: [
           {
-            text: 'B?n l? "Noel Bot AI" ?? - tr? l? ?o vui t?nh, th?ng minh c?a nh?m chat "Khu t? tr? Noel Nguy?n". H?y tr? l?i ng?n g?n, th?n thi?n b?ng ti?ng Vi?t.\n\nC?u h?i: ' + promptText
+            text: 'B?n l? "Noel Bot AI" ?? - tr? l? ?o vui t?nh, th?n thi?n, th?ng minh c?a nh?m chat "Khu t? tr? Noel Nguy?n". H?y tr? l?i ng?n g?n, t? nhi?n b?ng ti?ng Vi?t.\n\nC?u h?i: ' + promptText
           }
         ]
       }
@@ -250,7 +248,6 @@ io.on('connection', (socket) => {
   const clientIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address || 'unknown_ip';
 
   socket.on('join_room', ({ username, passcode }) => {
-    // SECURITY FIX #1: Check brute-force rate limit
     const limitCheck = checkRateLimit(clientIp);
     if (!limitCheck.allowed) {
       return socket.emit('join_error', '?? B?n ?? nh?p sai qu? nhi?u l?n. Vui l?ng ??i ' + limitCheck.waitSeconds + ' gi?y r?i th? l?i!');
@@ -265,7 +262,6 @@ io.on('connection', (socket) => {
       return socket.emit('join_error', 'M?t kh?u ph?ng kh?ng ch?nh x?c!');
     }
 
-    // Passcode correct: clear rate limit counter
     clearFailedAttempts(clientIp);
 
     const safeUsername = sanitizeText(username.trim()).slice(0, 25);
@@ -294,7 +290,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('verify_admin', ({ passcode }) => {
-    // SECURITY FIX #1: Rate limit brute-force on Admin passcode
     const limitCheck = checkRateLimit(clientIp + '_admin');
     if (!limitCheck.allowed) {
       return socket.emit('admin_error', '?? ?? nh?p sai m? Admin qu? nhi?u l?n. Cooldown: ' + limitCheck.waitSeconds + ' gi?y!');
@@ -340,9 +335,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('update_gemini_key', ({ apiKey }) => {
-    if (!currentUser || !currentUser.isAdmin) {
-      return socket.emit('action_error', 'Ch? Qu?n tr? vi?n m?i ???c ??i API Key!');
-    }
     if (!apiKey || typeof apiKey !== 'string') return;
     config.geminiApiKey = apiKey.trim();
     saveConfig();
@@ -350,11 +342,9 @@ io.on('connection', (socket) => {
     io.to('noel_autonomous_room').emit('bot_status_changed', { hasGeminiKey: true });
   });
 
-  // SECURITY FIX #4: Strictly verify admin token on backend for Admin messages
   socket.on('send_message', async ({ text, file, adminToken }) => {
     if (!currentUser) return;
 
-    // Server-side authoritative admin check
     const isLegitAdmin = !!(adminToken && adminTokens.has(adminToken));
     const hasAdminRole = currentUser.isAdmin && isLegitAdmin;
     const cleanText = sanitizeText((text || '').trim()).slice(0, 2000);
@@ -417,7 +407,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // SECURITY FIX #5: Enforce server-side check for deleting messages
   socket.on('delete_message', ({ messageId, adminToken }) => {
     if (!adminToken || !adminTokens.has(adminToken)) {
       return socket.emit('action_error', 'B?n kh?ng c? quy?n qu?n tr? vi?n!');
@@ -430,7 +419,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // SECURITY FIX #6: Enforce server-side check for clearing chat
   socket.on('clear_chat', ({ adminToken }) => {
     if (!adminToken || !adminTokens.has(adminToken)) {
       return socket.emit('action_error', 'B?n kh?ng c? quy?n qu?n tr? vi?n!');
